@@ -19,7 +19,7 @@
  ***************************************************************************/
 
 inputs: directory (mapset or DL_output structure)
-output: shapefile
+output: geopackage
 output: raster map NiN 7TK
 
 """
@@ -27,11 +27,13 @@ output: raster map NiN 7TK
 import argparse
 from copy import deepcopy
 from glob import glob
+from io import StringIO    
 import os
 from multiprocessing import Pool
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import NamedTemporaryFile
 
 import numpy as np
 from osgeo import gdal
@@ -109,7 +111,8 @@ def cleanup(maps, mtype):
 
 
 def import_predictions(args, tile):
-    """"""
+    """Import model prediction tiles"""
+    gscript.verbose(_("Importing predictions"))
     rmap = f'{args["prefix"]}_{tile.stem}'
     if rmap_exists(rmap) and not args["overwrite"]:
         gscript.verbose(f"{rmap} exists, skipping...")
@@ -118,7 +121,7 @@ def import_predictions(args, tile):
         assign_nodata(tile)
         Module(
             "r.external",
-            flags="m",  # "om": empty files fail to link with m or f flag
+            flags=["r"],  # "om": empty files fail to link with m or f flag
             overwrite=args["overwrite"],
             quiet=True,
             input=str(tile),
@@ -131,15 +134,19 @@ def import_predictions(args, tile):
 
 
 def setup_tiling(args):
-    """Defines tiles to process"""
+    """Define tiles to process"""
     tiles = f'{args["prefix"]}_tiles'
     reg = gscript.parse_command(
         "g.region",
         flags="g{}".format("a" if args["resolution"] else ""),
-        n=args["proc_win"][3] if args["proc_win"] else None,  # Remove hardcoded values after development
-        s=args["proc_win"][1] if args["proc_win"] else None,
+        n=args["proc_win"][1]
+        if args["proc_win"]
+        else None,  # Remove hardcoded values after development
+        s=args["proc_win"][3] if args["proc_win"] else None,
         w=args["proc_win"][0] if args["proc_win"] else None,
-        e=args["proc_win"][2] if args["proc_win"] else None,  # raster=f'{args["prefix"]}_mosaik',
+        e=args["proc_win"][2]
+        if args["proc_win"]
+        else None,  # raster=f'{args["prefix"]}_mosaik',
         res=args["resolution"],
         align=f'{args["prefix"]}_mosaik' if not args["resolution"] else None,
     )
@@ -151,7 +158,7 @@ def setup_tiling(args):
 
     if args["tiling"]:
         Module(
-            "v.mkgrid", map=tileset, grid=args["tiling"], overwrite=args["overwrite"]
+            "v.mkgrid", map=tiles, grid=args["tiling"], overwrite=args["overwrite"]
         )
     elif args["nprocs"] > 1:
         if int(reg["rows"]) > int(reg["cols"]):
@@ -166,7 +173,7 @@ def setup_tiling(args):
             height = int(reg["rows"])
             rows = 1
             cols = args["nprocs"]
-        Module("v.mkgrid", map=tileset, grid=[rows, cols], overwrite=args["overwrite"])
+        Module("v.mkgrid", map=tiles, grid=[rows, cols], overwrite=args["overwrite"])
     else:
         tiled_processing = False
 
@@ -174,7 +181,7 @@ def setup_tiling(args):
 
 
 def get_tile_bboxes(args, tiled_processing):
-    """"""
+    """Compute bounding boxes for tiles"""
     if not tiled_processing:
         return None
 
@@ -198,7 +205,7 @@ def get_tile_bboxes(args, tiled_processing):
 
 
 def bbox2regenv(bbox, region, overlap=0, align_rmap=None, res=None):
-    """"""
+    """Create region environment from bounding box"""
     # Setup region environment
     g_env = os.environ.copy()
     ns_overlap = overlap * (res or float(region["nsres"]))
@@ -216,37 +223,9 @@ def bbox2regenv(bbox, region, overlap=0, align_rmap=None, res=None):
     return g_env
 
 
-def export_results(workdir):
-    """"""
-    if workdir:
-        # Write out resulting maps as GTiff using GDAL
-        # Switch to COG with more recent GDAL
-        Module(
-            "r.external.out",
-            directory=str(workdir),
-            format="GTiff",
-            options="BIGTIFF=YES,COMPRESS=DEFLATE,TILED=YES",
-        )
-    else:
-        # Cease using GDAL export
-        Module(
-            "r.external.out",
-            flags="r",
-        )
-
-
-def export_cog(workdir, rmap):
-    """"""
-    Module(
-        "r.out.gdal",
-        input=rmap,
-        output=workdir.joinpath(rmap + ".tif"),
-        format="COG",
-        createopts="BIGTIFF=YES,COMPRESS=DEFLATE",
-    )
-
-
 def extract_lines_and_areas(args, bbox, region):
+    """Classify and filter objects by width and size"""
+    gscript.verbose(_("Extracting lines and areas"))
     trac_half_max_width_int = int((args["maximum_width"] ** 2 / 2.0))
     trac_half_min_width_int = int((args["minimum_width"] ** 2 / 2.0))
     trac_half_min_width_int = max([trac_half_min_width_int, 1])
@@ -312,7 +291,7 @@ def extract_lines_and_areas(args, bbox, region):
                 verbose=True,
                 metric="squared",  # squared metric allows reclassification
                 input=f"{tile_prefix}_extract_smoothed_pre_inv",
-                distance=f"{tile_prefix}_extract_inv_dist_buf",
+                distance=f"{tile_prefix}_inv_dist_buf",
             ),
             # Extract areas
             Module(
@@ -321,7 +300,7 @@ def extract_lines_and_areas(args, bbox, region):
                 env_=genv_tile,
                 overwrite=args["overwrite"],
                 verbose=True,
-                expression=f"{tile_prefix}_extract_inv_dist_areas=if({tile_prefix}_extract_inv_dist_buf>={(args['maximum_width']/2)**2},1,null())",
+                expression=f"{tile_prefix}_extract_inv_dist_areas=if({tile_prefix}_inv_dist_buf>={(args['maximum_width']/2)**2},{args['prefix']}_mosaik_clumps,null())",
             ),
             # Extract lines
             Module(
@@ -330,7 +309,7 @@ def extract_lines_and_areas(args, bbox, region):
                 env_=genv_tile,
                 overwrite=args["overwrite"],
                 verbose=True,
-                expression=f"{tile_prefix}_extract_inv_dist_lines=if({tile_prefix}_extract_inv_dist_buf>={(args['minimum_width']/2)**2},1,null())",
+                expression=f"{tile_prefix}_extract_inv_dist_lines=if({tile_prefix}_inv_dist_buf>={(args['minimum_width']/2)**2},{args['prefix']}_mosaik_clumps,null())",
             ),
             Module(
                 "r.thin",
@@ -349,8 +328,16 @@ def extract_lines_and_areas(args, bbox, region):
                 overwrite=args["overwrite"],
                 metric="squared",  # squared metric allows reclassification
                 input=f"{tile_prefix}_extract_inv_dist_areas",
-                value=f"{tile_prefix}_areas",
+                value=f"{tile_prefix}_areas_extract_val",
                 maximum_distance=(args["maximum_width"] / 2) ** 2,
+            ),
+            Module(
+                "r.mapcalc",
+                run_=False,
+                env_=genv_tile,
+                overwrite=args["overwrite"],
+                verbose=True,
+                expression=f"{tile_prefix}_areas=int({tile_prefix}_areas_extract_val)",
             ),
             Module(
                 "r.grow.distance",
@@ -373,11 +360,12 @@ def extract_lines_and_areas(args, bbox, region):
             ),
         ]
     )
-    return mm, ["areas", "lines", "mosaik_smoothed"]
+    return mm, ["areas", "lines", "mosaik_smoothed", "inv_dist_buf"]
 
 
 def clean_vector_lines(lines, min_length, minimum_gap):
     """Clean dangling segments from vector lines after thinning"""
+    gscript.verbose(_("Cleaning vector data"))
     Module(
         "v.net.components",
         overwrite=True,
@@ -385,7 +373,7 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         input=lines,
         output=f"{lines}_clean_net",
         method="strong",
-        )
+    )
     Module(
         "v.reclass",
         overwrite=True,
@@ -394,7 +382,7 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         type="line",
         output=f"{lines}_clean_net_rc",
         column="comp",
-        )
+    )
     Module(
         "v.distance",
         overwrite=True,
@@ -404,11 +392,11 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         from_type="line",
         to=f"{lines}_clean_net_rc",
         to_type="line",
-        #to_column="cat",
-        upload=["cat","dist"],
+        # to_column="cat",
+        upload=["cat", "dist"],
         output=f"{lines}_clean_connections",
         table=f"{lines}_clean_connections",
-        column=["to_cat","dist"],
+        column=["to_cat", "dist"],
         dmin=0.1,
         dmax=minimum_gap,
     )
@@ -420,15 +408,15 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         type="line",
         where=f"cat in (SELECT DISTINCT cat FROM (SELECT DISTINCT cat, from_cat, to_cat FROM {lines}_clean_connections WHERE from_cat != to_cat GROUP BY CASE WHEN from_cat > to_cat THEN to_cat || '_' || from_cat ELSE from_cat || '_' || to_cat END ORDER BY dist) ORDER BY cat)",
         output=f"{lines}_clean_connections_rel",
-        )
+    )
     Module(
         "v.patch",
         overwrite=True,
         quiet=True,
-        #flags=["b"],
+        # flags=["b"],
         input=[lines, f"{lines}_clean_connections_rel"],
         output=f"{lines}_clean_patch",
-        )
+    )
     Module(
         "v.edit",
         flags="r",
@@ -436,10 +424,10 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         map=f"{lines}_clean_patch",
         type="line",
         tool="snap",
-        threshold=[0,0.05,0],
+        threshold=[0, 0.05, 0],
         ids=-9999,
-        snap="vertex"
-        )
+        snap="vertex",
+    )
     Module(
         "v.edit",
         verbose=True,
@@ -447,31 +435,31 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         map=f"{lines}_clean_patch",
         type="line",
         tool="break",
-        threshold=[0,0.05,0],
+        threshold=[0, 0.05, 0],
         ids=-9999,
-        snap="vertex"
-        )
-    """Module(
+        snap="vertex",
+    )
+    Module(
         "v.clean",
         overwrite=True,
         quiet=True,
         input=f"{lines}_clean_patch",
         output=f"{lines}_clean_break",
         tool=["snap","break","rmline","rmdupl"],
-        threshold=[0.05,0.00,0.00,0.00],
+        threshold=[0.01,0.00,0.00,0.00],
         type="line",
-        )"""
+        )
     Module(
         "v.category",
         overwrite=True,
         quiet=True,
         flags="t",
-        input=f"{lines}_clean_patch",
+        input=f"{lines}_clean_break",
         output=f"{lines}_clean_cat",
         layer=2,
         type="line",
         option="add",
-        )
+    )
     Module(
         "v.extract",
         overwrite=True,
@@ -481,7 +469,7 @@ def clean_vector_lines(lines, min_length, minimum_gap):
         layer=2,
         type="line",
         output=f"{lines}_clean_extract",
-        )
+    )
     Module(
         "v.build.polylines",
         overwrite=True,
@@ -564,6 +552,7 @@ def clean_vector_lines(lines, min_length, minimum_gap):
     )
     Module(
         "g.remove",
+        quiet=True,
         type="vector",
         pattern=f"{lines}_clea*",
         flags="f",
@@ -571,19 +560,7 @@ def clean_vector_lines(lines, min_length, minimum_gap):
 
 
 def run_modules(modules, result_suffixes, args):
-    """"""
-    # Check if resuts exist or should be overwritten
-    if (
-        all(
-            [
-                rmap_exists(f'{args["prefix"]}_{result_suffix}')
-                for result_suffix in result_suffixes
-            ]
-        )
-        and not args["overwrite"]
-    ):
-        return
-
+    """Run GRASS module objects in a parallel module queue and build vrt from results"""
     mod_queue = ParallelModuleQueue(nprocs=int(args["nprocs"]))
     for mod in modules:
         # Setup region environment
@@ -595,7 +572,7 @@ def run_modules(modules, result_suffixes, args):
         Module(
             "r.buildvrt",
             input=gscript.read_command(
-                "g.list", flags="e", type="raster", pattern=f".*[0-9]_{result_suffix}$"
+                "g.list", flags="e", type="raster", pattern=f".*[0-9]_{result_suffix}$", mapset="."
             )
             .rstrip()
             .split("\n"),
@@ -606,94 +583,193 @@ def run_modules(modules, result_suffixes, args):
 
 
 def export_7TK(args, rmap):
-    col_defs = {
-        0: "255:255:255",
-        20: "230:180:180",
-        40: "230:140:140",
-        60: "235:95:9",
-        80: "240:50:50",
-        100: "240:10:10",
-        "nv": "255:255:255",
-        "*": "0:0:0",
-    }
-    col_rules = {}
+    gscript.verbose(_("Computing and exporting 7TK maps"))
+    color_rules = [
+        "0 255:255:255",
+        "20 230:180:180",
+        "40 230:140:140",
+        "60 235:95:9",
+        "80 240:50:50",
+        "100 240:10:10",
+        "default grey",
+        "end",
+    ]
     map_info = gscript.parse_command("r.info", map=rmap, flags="g")
 
-    export_results(args["workdir"])
     mod_queue = ParallelModuleQueue(nprocs=2)
     for res in [10, 100]:
         g_env = os.environ.copy()
         g_env["GRASS_REGION"] = gscript.region_env(flags="a", raster=rmap, res=res)
 
-        # Module("g.region", flags="ap", raster=rmap, res=res)
-
-        resamp = Module(
-            "r.resamp.stats",
-            overwrite=True,
-            input=rmap,
-            output=f'{args["prefix"]}_7TK_{res}',
-            method="count",
-            run_=False,
-            env_=g_env,
+        # Setup process
+        resamp = MultiModule(
+            [
+                # Count wheel rut pixels
+                Module(
+                    "r.resamp.stats",
+                    run_=False,
+                    env_=g_env,
+                    overwrite=True,
+                    input=rmap,
+                    output=f'{args["prefix"]}_7TK_{res}_c',
+                    method="count",
+                ),
+                # Rescale to percentage
+                Module(
+                    "r.mapcalc",
+                    run_=False,
+                    env_=g_env,
+                    overwrite=True,
+                    expression=f'{args["prefix"]}_7TK_{res}=int(round(({args["prefix"]}_7TK_{res}_c / (({res} ^ 2) / (float({map_info["ewres"]}) * float({map_info["nsres"]}))))*100.0))',
+                ),
+                # Assign colors
+                Module(
+                    "r.colors",
+                    run_=False,
+                    env_=g_env,
+                    map=f'{args["prefix"]}_7TK_{res}',
+                    rules="-",
+                    stdin_="\n".join(color_rules),
+                ),
+                # Export to Cloud optimized GeoTiff
+                Module(
+                    "r.out.gdal",
+                    run_=False,
+                    env_=g_env,
+                    overwrite=True,
+                    quiet=True,
+                    input=f'{args["prefix"]}_7TK_{res}',
+                    output=str(args["workdir"].joinpath(f'{args["prefix"]}_7TK_{res}.tif')),
+                    type="Byte",
+                    format="GTiff",
+                    createopt="BIGTIFF=YES,COMPRESS=DEFLATE",
+                ),
+                # Export to Cloud optimized GeoTiff
+                Module(
+                    "g.remove",
+                    run_=False,
+                    env_=g_env,
+                    quiet=True,
+                    flags="f",
+                    type="raster",
+                    name=f'{args["prefix"]}_7TK_{res}_c',
+                ),
+            ]
         )
         mod_queue.put(resamp)
 
-        # Define color table
-        col_rules[res] = {}
-        for dkey, col_val in col_defs.items():
-            if isinstance(dkey, int):
-                col_rules[res][
-                    int(
-                        round(
-                            (
-                                (res ** 2)
-                                / (float(map_info["ewres"]) * float(map_info["nsres"]))
-                            )
-                            * dkey
-                            / 100.0,
-                            0,
-                        )
-                    )
-                ] = col_val
-
-        """Module("r.colors",
-               map=f'{args["prefix"]}_7TK_{res}',
-               output=f'{args["prefix"]}_7TK_{res}',
-               rules="-",
-               stdin_=col_rules
-               )"""
-        # export_cog(args["workdir"], f'{args["prefix"]}_7TK_{res}')
     # Run module queue
     mod_queue.wait()
-    export_results(None)
 
-    # Assign GDAL color table to output
+    return 0
+
+
+def export_7TK2(args, rmap):
+    """Export raster map with NiN 7TK variable"""
+    gscript.verbose(_("Computing and exporting 7TK maps"))
+    # Filter by size and length
+    length_arr = np.genfromtxt(str(args["workdir"].joinpath("length_rc.txt")), delimiter="=", dtype=np.int)
+    length_arr = length_arr[np.where(length_arr[:,1] > (args["minimum_length"] * 100.0))]
+    size_arr = np.genfromtxt(str(args["workdir"].joinpath("size_rc.txt")), delimiter="=", dtype=np.int)
+    size_arr = size_arr[np.where(size_arr[:,1] > args["minimum_size"])]
+    clumps = set(size_arr[:,0].tolist() + length_arr[:,0].tolist())
+    Module(
+        "r.reclass",
+        overwrite=True,
+        quiet=True,
+        input=rmap,
+        output=f"{rmap}_rc",
+        rules="-",
+        stdin_="\n".join([f"{c}=1\n" for c in clumps] + ["* = NULL"]),
+    )
+    # Define color rules
+    color_rules = [
+        "0 255:255:255",
+        "20 230:180:180",
+        "40 230:140:140",
+        "60 235:95:9",
+        "80 240:50:50",
+        "100 240:10:10",
+        "default grey",
+        "end",
+    ]
+
+    resolutions = [10, 100]
+    map_info = gscript.parse_command("r.info", map=rmap, flags="g")
+
+    for idx, res in enumerate(resolutions):
+        g_env = os.environ.copy()
+        g_env["GRASS_REGION"] = gscript.region_env(flags="a", raster=rmap, res=res)
+
+        # Count wheel rut pixels
+        Module(
+            "r.resamp.stats",
+            env_=g_env,
+            overwrite=True,
+            quiet=True,
+            input=f"{rmap}_rc" if res == 10 else f'{args["prefix"]}_7TK_{resolutions[idx - 1]}',
+            output=f'{args["prefix"]}_7TK_{res}',
+            method="maximum" if res == 10 else "count",
+        )
+        if res == 100:
+            # Assign colors
+            Module(
+                "r.colors",
+                quiet=True,
+                env_=g_env,
+                map=f'{args["prefix"]}_7TK_{res}',
+                rules="-",
+                stdin_="\n".join(color_rules),
+            )
+            # Export to Cloud optimized GeoTiff
+            Module(
+                "r.out.gdal",
+                env_=g_env,
+                overwrite=True,
+                quiet=True,
+                flags="f",
+                input=f'{args["prefix"]}_7TK_{res}',
+                output=str(args["workdir"].joinpath(f'{args["prefix"]}_7TK_{res}.tif')),
+                type="Byte",
+                format="GTiff",
+                createopt="BIGTIFF=YES,COMPRESS=DEFLATE",
+            )
+
+    args["workdir"].joinpath("length_rc.txt").unlink()
+    args["workdir"].joinpath("size_rc.txt").unlink()
+
+    return 0
 
 
 def check_userinput(args):
     """Check if input arguments are valid"""
-    if args["workdir"]:
-        if isinstance(args["workdir"], str):
-            args["workdir"] = Path(args["workdir"])
-        if not args["workdir"].exists:
-            sys.exit("Error: workdir <{}> does not exist.".format(args["workdir"]))
+    for in_path in ["workdir", "output", "roads", "streams"]:
+        if args[in_path]:
+            if isinstance(args[in_path], str):
+                args[in_path] = Path(args[in_path])
+            if not args[in_path].exists:
+                sys.exit("Error: Path <{str(args[in_path])}> provided in {in_path} option does not exist.")
     
-        if not os.access(args["workdir"], os.W_OK):
-            sys.exit(
-                "Error: No permission to write to workdir <{}>.".format(
-                    str(args["workdir"])
+            if in_path in ["workdir", "output"] and not os.access(args[in_path], os.W_OK):
+                sys.exit(
+                    "Error: No permission to write to directory <{str(args[in_path])}> provided in {in_path} option."
                 )
-            )
-    else:
-        sys.exit("Error: Input for workdir is required.".format(args["workdir"]))
- 
-    if args['dtm']:
+
+            if in_path in ["roads", "streams"] and not os.access(args[in_path], os.R_OK):
+                sys.exit(
+                    "Error: No permission to read file <{str(args[in_path])}> provided in {in_path} option."
+                )
+
+        elif in_path in ["workdir", "output"]:
+            sys.exit("Error: Input for {in_path} is required.")
+
+    if args["dtm"]:
         pass
 
-    if args['ndvi']:
+    if args["ndvi"]:
         pass
 
-    if args['prefix']:
+    if args["prefix"]:
         pass
 
     if args["tiling"]:
@@ -701,26 +777,40 @@ def check_userinput(args):
             try:
                 args["tiling"] = tuple(int(t) for t in args["tiling"].split(","))
             except ValueError:
-                sys.exit("Error: Only two numbers, separated by comma are valid input for tiling.")
+                sys.exit(
+                    "Error: Only two numbers, separated by comma are valid input for tiling."
+                )
         if not len(args["tiling"]) == 2:
-            sys.exit("Error: tiling input needs to be given as pair of numbers for rows and columns")
+            sys.exit(
+                "Error: tiling input needs to be given as pair of numbers for rows and columns"
+            )
 
     if args["proc_win"]:
         if isinstance(args["proc_win"], str):
             try:
-                args["proc_win"] = tuple(float(c) for c in args["proc_win"].strip().split(" "))
+                args["proc_win"] = tuple(
+                    float(c) for c in args["proc_win"].strip().split(" ")
+                )
             except ValueError:
-                sys.exit("Error: Only four numbers, separated by space are valid input for tiling.")
+                sys.exit(
+                    "Error: Only four numbers, separated by space are valid input for tiling."
+                )
         if not len(args["proc_win"]) == 4:
-            sys.exit("Error: Prcess window coordinates needsto be given as four numbers for West North East Souths")
+            sys.exit(
+                "Error: Prcess window coordinates needsto be given as four numbers for West North East Souths"
+            )
 
     if isinstance(args["input"], str):
         args["input"] = Path(args["input"])
         if not args["input"].exists:
-            sys.exit("Error: Input directory <{}> does not exist.".format(str(args["input"])))
+            sys.exit(
+                "Error: Input directory <{}> does not exist.".format(str(args["input"]))
+            )
 
     if not os.access(args["input"], os.R_OK):
-        sys.exit("Error: Input directory <{}> is not readable.".format(str(args["infile"])))
+        sys.exit(
+            "Error: Input directory <{}> is not readable.".format(str(args["infile"]))
+        )
 
     for option in ["maximum_width", "minimum_length", "minimum_width", "resolution"]:
         if option == "resolution":
@@ -746,8 +836,9 @@ def check_userinput(args):
 
     return args
 
-def classify_object_size(args):
 
+def classify_object_size(args):
+    """Create reclass map with object size"""
     Module(
         "r.reclass",
         overwrite=True,
@@ -764,15 +855,9 @@ def classify_object_size(args):
         input=f"{args['prefix']}_mosaik_rc",
         output=f"{args['prefix']}_mosaik_clumps",
     )
-    stderr = (
-        Module(
-            "r.reclass",
-            overwrite=args["overwrite"],
-            quiet=True,
-            input=f"{args['prefix']}_mosaik_clumps",
-            output=f"{args['prefix']}_mosaik_size_rc",
-            rules="-",
-            stdin_=Module(
+    rc_file_name = args["workdir"].joinpath("size_rc.txt")
+    with open(rc_file_name, "w") as rc_file:
+        rc_file.write(Module(
                 "r.stats",
                 flags=["a", "n"],
                 input=f"{args['prefix']}_mosaik_clumps",
@@ -780,7 +865,16 @@ def classify_object_size(args):
                 stdout_=subprocess.PIPE,
             )
             .outputs["stdout"]
-            .value,
+            .value)
+        rc_file.write("*=NULL\n")
+    stderr = (
+        Module(
+            "r.reclass",
+            overwrite=args["overwrite"],
+            quiet=True,
+            input=f"{args['prefix']}_mosaik_clumps",
+            output=f"{args['prefix']}_mosaik_size_rc",
+            rules=str(rc_file_name),
             stderr_=subprocess.PIPE,
         )
         .outputs["stderr"]
@@ -790,6 +884,49 @@ def classify_object_size(args):
         gscript.fatal(_(stderr))
     return 0
 
+
+def classify_object_length(args):
+    """Create reclass map with object length"""
+    np_arr = np.genfromtxt(
+        Module(
+                "v.to.db",
+                flags=["p"],
+                map=f"{args['prefix']}_lines_all",
+                separator=",",
+                option="length",
+                units="meters",
+                stdout_=subprocess.PIPE,
+            ).outputs["stdout"].value.strip().split("\n"),
+                delimiter=",",
+                names=True,
+                dtype=None,
+    )
+    np_arr["length"] = (np_arr["length"] * 100.0).astype(np.int)
+    fo = StringIO()
+    np.savetxt(fo, np_arr, delimiter="=", fmt="%i")
+    fo.write("*=NULL\n")
+    rc_file_name = args["workdir"].joinpath("length_rc.txt")
+    with open(rc_file_name, "w") as rc_file:
+        rc_file.write(fo.getvalue())
+
+    stderr = (
+        Module(
+            "r.reclass",
+            overwrite=args["overwrite"],
+            quiet=True,
+            input=f"{args['prefix']}_mosaik_clumps",
+            output=f"{args['prefix']}_mosaik_length_rc",
+            rules=str(rc_file_name),
+            stderr_=subprocess.PIPE,
+        )
+        .outputs["stderr"]
+        .value.strip()
+    )
+    if "error" in stderr.lower():
+        gscript.fatal(_(stderr))
+    return 0
+
+
 # To dos:
 # Handle areas
 # generate spatial units (homogenous line sections)
@@ -797,10 +934,9 @@ def classify_object_size(args):
 # connect lines within gaps (next step)
 
 
-def identify_surface_damage(args, bbox, region):
+def identify_damage(args, bbox, region, damage_type):
 
     tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
-    print(tile_prefix)
     genv_tile = bbox2regenv(
         # bbox, region, overlap=0, align_rmap=f'{args["prefix"]}_mosaik', res=None
         bbox,
@@ -823,20 +959,20 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                input=args["dtm"],
-                output=f"{tile_prefix}_dtm_res",
+                input=args[damage_type],
+                output=f"{tile_prefix}_{damage_type}_res",
                 method="minimum",
             ),
             # Smooth borders by buffering out and in
             Module(
                 "r.geomorphon",
                 run_=False,
-                # env_=genv_tile_overlap,
+                env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
                 flags=["e"],
-                elevation=f"{tile_prefix}_dtm_res",
-                forms=f"{tile_prefix}_dtm_forms",
+                elevation=f"{tile_prefix}_{damage_type}_res",
+                forms=f"{tile_prefix}_{damage_type}_forms",
                 search=17,
                 flat=3,
                 dist=1,
@@ -847,10 +983,11 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                expression="{tile_prefix}_dtm_formbounds=if({forms}!=9&&{forms}!=10, if({forms}[0,1]>=9||{forms}[1,0]>=9||{forms}[1,1]>=9|| {forms}[-1,-1]>=9||{forms}[-1,1]>=9||{forms}[1,-1]>=9|| {forms}[0,-1]>=9||{forms}[-1,0]>=9, {dtm},null()),null())".format(
-                    dtm=args["dtm"],
-                    forms=f"{tile_prefix}_dtm_forms",
+                expression="{tile_prefix}_{damage_type}_formbounds=if({forms}!=9&&{forms}!=10, if({forms}[0,1]>=9||{forms}[1,0]>=9||{forms}[1,1]>=9|| {forms}[-1,-1]>=9||{forms}[-1,1]>=9||{forms}[1,-1]>=9|| {forms}[0,-1]>=9||{forms}[-1,0]>=9, {damage_map},null()),null())".format(
+                    damage_map=args[damage_type],
+                    forms=f"{tile_prefix}_{damage_type}_forms",
                     tile_prefix=tile_prefix,
+                    damage_type=damage_type,
                 ),
             ),
             Module(
@@ -859,10 +996,11 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                expression="{tile_prefix}_dtm_coreforms=if({forms}>=6&&{forms}<=8,if({forms}[0,1]>=9||{forms}[1,0]>=9||{forms}[1,1]>=9||{forms}[-1,-1]>=9||{forms}[-1,1]>=9||{forms}[1,-1]>=9||{forms}[0,-1]>=9||{forms}[-1,0]>=9,{dtm},null()),if({forms}>=9,{dtm},null()))".format(
-                    forms=f"{tile_prefix}_dtm_forms",
+                expression="{tile_prefix}_{damage_type}_coreforms=if({forms}>=6&&{forms}<=8,if({forms}[0,1]>=9||{forms}[1,0]>=9||{forms}[1,1]>=9||{forms}[-1,-1]>=9||{forms}[-1,1]>=9||{forms}[1,-1]>=9||{forms}[0,-1]>=9||{forms}[-1,0]>=9,{damage_map},null()),if({forms}>=9,{damage_map},null()))".format(
+                    forms=f"{tile_prefix}_{damage_type}_forms",
                     tile_prefix=tile_prefix,
-                    dtm=args["dtm"],
+                    damage_map=args[damage_type],
+                    damage_type=damage_type,
                 ),
             ),
             Module(
@@ -871,10 +1009,11 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                expression="{tile_prefix}_dtm_formbounds=if(isnull({coreforms}), if((!isnull({coreforms}[0,1]) || !isnull({coreforms}[1,0]) || !isnull({coreforms}[1,1]) || !isnull({coreforms}[-1,-1]) || !isnull({coreforms}[-1,1]) || !isnull({coreforms}[1,-1]) || !isnull({coreforms}[0,-1]) || !isnull({coreforms}[-1,0])), {dtm}, null()),null())".format(
-                    coreforms=f"{tile_prefix}_dtm_coreforms",
+                expression="{tile_prefix}_{damage_type}_formbounds=if(isnull({coreforms}), if((!isnull({coreforms}[0,1]) || !isnull({coreforms}[1,0]) || !isnull({coreforms}[1,1]) || !isnull({coreforms}[-1,-1]) || !isnull({coreforms}[-1,1]) || !isnull({coreforms}[1,-1]) || !isnull({coreforms}[0,-1]) || !isnull({coreforms}[-1,0])), {damage_map}, null()),null())".format(
+                    coreforms=f"{tile_prefix}_{damage_type}_coreforms",
                     tile_prefix=tile_prefix,
-                    dtm=args["dtm"],
+                    damage_map=args[damage_type],
+                    damage_type=damage_type,
                 ),
             ),
             Module(
@@ -883,8 +1022,8 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                input=f"{tile_prefix}_dtm_formbounds",
-                value=f"{tile_prefix}_dtm_formbounds_height",
+                input=f"{tile_prefix}_{damage_type}_formbounds",
+                value=f"{tile_prefix}_{damage_type}_formbounds_height",
             ),
             Module(
                 "r.mapcalc",
@@ -892,7 +1031,7 @@ def identify_surface_damage(args, bbox, region):
                 env_=genv_tile_overlap,
                 overwrite=True,
                 quiet=True,
-                expression=f"{tile_prefix}_destruction_depth=if({args['prefix']}_mosaik_smoothed_all,{tile_prefix}_dtm_formbounds_height-{tile_prefix}_dtm_coreforms,null())",
+                expression=f"{tile_prefix}_{damage_type}_destruction_depth=if({args['prefix']}_mosaik_smoothed_all,{tile_prefix}_{damage_type}_formbounds_height-{tile_prefix}_{damage_type}_coreforms,null())",
             ),
             Module(
                 "r.neighbors",
@@ -901,60 +1040,181 @@ def identify_surface_damage(args, bbox, region):
                 overwrite=True,
                 quiet=True,
                 flags="c",
-                input=f"{tile_prefix}_destruction_depth",
+                selection=f"{args['prefix']}_lines_all",
+                input=f"{tile_prefix}_{damage_type}_destruction_depth",
                 output=[
-                    f"{tile_prefix}_destruction_depth_min",
-                    f"{tile_prefix}_destruction_depth_n",
-                    f"{tile_prefix}_destruction_depth_q25",
+                    f"{tile_prefix}_{damage_type}_destruction_depth_min",
+                    f"{tile_prefix}_{damage_type}_destruction_depth_n",
+                    f"{tile_prefix}_{damage_type}_destruction_depth_q25",
                 ],
                 size=15,
                 method=["maximum", "count", "quantile"],
                 quantile=0.975,
             ),
+            # Module(
+            #     "r.mapcalc",
+            #     run_=False,
+            #     env_=genv_tile,
+            #     overwrite=True,
+            #     quiet=True,
+            #     expression=f"{tile_prefix}_line_destruction_depth_q25=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_destruction_depth_q25)|||{tile_prefix}_destruction_depth_q25<0.03,1,if({tile_prefix}_destruction_depth_q25>0.10,3,2)),null())",
+            # ),
             Module(
                 "r.mapcalc",
                 run_=False,
                 env_=genv_tile,
                 overwrite=True,
                 quiet=True,
-                expression=f"{tile_prefix}_line_destruction_depth_q25=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_destruction_depth_q25)|||{tile_prefix}_destruction_depth_q25<0.03,1,if({tile_prefix}_destruction_depth_q25>0.10,3,2)),null())",
-            ),
-            Module(
-                "r.mapcalc",
-                run_=False,
-                env_=genv_tile,
-                overwrite=True,
-                quiet=True,
-                expression=f"{tile_prefix}_line_destruction_depth_min=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_destruction_depth_min)|||{tile_prefix}_destruction_depth_min<0.01,1,if({tile_prefix}_destruction_depth_min>0.10,3,2)),null())",
-            ),
-            Module(
-                "r.mapcalc",
-                run_=False,
-                env_=genv_tile,
-                overwrite=True,
-                quiet=True,
-                expression=f"{tile_prefix}_line_destruction_depth_n=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_destruction_depth_n),0,{tile_prefix}_destruction_depth_n),null())",
+                stdin_=f"{tile_prefix}_line_{damage_type}_destruction_depth_min=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_{damage_type}_destruction_depth_min), 0,if({tile_prefix}_{damage_type}_destruction_depth_min<0.01,1,if({tile_prefix}_{damage_type}_destruction_depth_min>0.10,3,2))),null())\n" +
+                f"{tile_prefix}_line_{damage_type}_destruction_depth_n=if({args['prefix']}_lines_all,if({tile_prefix}_{damage_type}_destruction_depth_n==0, 0 ,if({tile_prefix}_{damage_type}_destruction_depth_n<25,1,if({tile_prefix}_{damage_type}_destruction_depth_n>50,3,2))),null())"
+            # ),
+            # Module(
+            #     "r.mapcalc",
+            #     run_=False,
+            #     env_=genv_tile,
+            #     overwrite=True,
+            #     quiet=True,
+            #     expression=f"{tile_prefix}_line_destruction_depth_n=if({args['prefix']}_lines_all,if(isnull({tile_prefix}_destruction_depth_n),0,if({tile_prefix}_destruction_depth_n<25,1,if({tile_prefix}_destruction_depth_n>50,3,2)),null())",
             ),
         ]
     )
     return mm, [
-        "line_destruction_depth_q25",
-        "line_destruction_depth_min",
-        "line_destruction_depth_n",
+        #"line_destruction_depth_q25",
+        f"line_{damage_type}_destruction_depth_min",
+        f"line_{damage_type}_destruction_depth_n",
     ]
 
 
 def export_vector_map(args, vmap):
     out_file = args["output"].joinpath(args["prefix"] + ".gpkg")
-    flags = {True: ["s", "2", "m", "u"],
-             False: ["s", "2", "m"]}
-    Module("v.out.ogr",
-           overwrite=True,
-           flags=flags[out_file.exists()],
-           input=vmap,
-           output=str(out_file),
-           output_layer=vmap,
-           )
+    flags = {True: ["s", "2", "m", "u"], False: ["s", "2", "m"]}
+    Module(
+        "v.out.ogr",
+        overwrite=True,
+        flags=flags[out_file.exists()],
+        input=vmap,
+        output=str(out_file),
+        output_layer=vmap,
+    )
+
+
+def collect_line_statistics(args, bbox, region):
+    
+    tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
+
+    mc_expression=f'{tile_prefix}_line_statistics=int(if({args["prefix"]}_mosaik_size_rc > {args["minimum_size"]} || {args["prefix"]}_mosaik_length_rc > {args["minimum_length"]} * 100.0, if({tile_prefix}_lines_all_core, {args["prefix"]}_mosaik_clumps*10000 '
+    if args["ndvi"]:
+        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_min_all), 0 {args["prefix"]}_line_ndvi_destruction_min_all*1000)'
+        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_n_all), 0, {args["prefix"]}_line_ndvi_destruction_n_all*100)'
+    
+    if args["dtm"]:
+        mc_expression += f'+if(isnull({args["prefix"]}_line_dtm_destruction_depth_min_all), 0, {args["prefix"]}_line_dtm_destruction_depth_min_all*10)'
+        mc_expression += f'+if(isnull({args["prefix"]}_line_dtm_destruction_depth_n_all), 0, {args["prefix"]}_line_dtm_destruction_depth_n_all)'
+    
+    mc_expression += ", null()),null()))"
+
+    genv_tile = bbox2regenv(
+        # bbox, region, overlap=0, align_rmap=f'{args["prefix"]}_mosaik', res=None
+        bbox,
+        region,
+        overlap=0,
+        align_rmap=None,
+        res=args["resolution"],
+    )
+
+    mm = MultiModule(
+        [
+            Module(
+                "v.to.rast",
+                run_=False,
+                env_=genv_tile,
+                overwrite=True,
+                quiet=True,
+                input=f"{args['prefix']}_lines_all_core",
+                output=f"{tile_prefix}_lines_all_core",
+                type="line",
+                use="val",
+            ),
+            Module(
+                "r.mapcalc",
+                run_=False,
+                env_=genv_tile,
+                overwrite=True,
+                quiet=True,
+                expression=mc_expression,
+            ),
+        ]
+    )
+    return mm, ["line_statistics"]
+
+
+def add_vector_attributes(args, geom_type):
+    """Add available attributes to attribute table"""
+    if geom_type == "lines":
+        Module(
+               "v.to.db",
+               overwrite=True,
+               quiet=True,
+               map=f'{args["prefix"]}_lines',
+               type="line",
+               option="length",
+               columns="length_m",
+               units="meters",
+        )
+        if args["dtm"] or args["ndvi"]:
+            addcol_str = f'BEGIN TRANSACTION;\nALTER TABLE {args["prefix"]}_lines ADD COLUMN cluster integer;\n'
+            update_str = f'UPDATE {args["prefix"]}_lines SET cluster=CAST(substr(CAST(cat AS text), 1, length(cat)-4) AS integer), '
+            if args["dtm"]:
+                addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN surface_damage_depth integer;\n'
+                addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN surface_damage_extent integer;\n'
+    
+                update_str += "surface_damage_extent=CAST(substr(CAST(cat AS text), length(cat), 1) AS integer), "
+                update_str += "surface_damage_depth=CAST(substr(CAST(cat AS text), length(cat)-1, 1) AS integer);"
+            if args["ndvi"]:
+                if update_str.endswith(";\n"):
+                    update_str = update_str.replace(";\n", "\n")
+                addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN vegetation_damage_depth integer;\n'
+                addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN vegetation_damage_extent integer;\n'
+                update_str += "vegetation_damage_extent = CAST(substr(CAST(cat AS text), length(cat)-2, 1) AS integer), "
+                update_str += "vegetation_damage_depth = CAST(substr(CAST(cat AS text), length(cat)-3, 1)) AS integer);"
+            update_str = update_str.rstrip(", ")
+            update_str = update_str.rstrip(";\n")
+            update_str += ";\nCOMMIT;\n"
+        tmp_sql = args["workdir"].joinpath("attr.sql")
+        tmp_sql.write_text(addcol_str + update_str)
+        Module(
+               "db.execute",
+               quiet=True,
+               input=str(tmp_sql)
+               )
+
+    else:
+        Module(
+               "v.to.db",
+               overwrite=True,
+               quiet=True,
+               map=f'{args["prefix"]}_areas',
+               type="centroid",
+               option="area",
+               columns="area_m2",
+               units="meters",
+        )
+
+
+def get_width_attributes(args, geometry_type):
+    """Extracts width of objects from distance raster"""
+    stats = np.genfromtxt(Module("r.univar", flags=["t", "e"], map=f'{args["prefix"]}_inv_dist_buf_all', zones=rmap, stdout_=subprocess.PIPE).outputs["stdout"].value.strip().split("\n"), delimiter="|", names=True, dtype=None)
+    width_sql_path = args["workdir"].joinpath(f"width_update_{geometry_type}.sql")
+    with open(width_sql_path, mode="w") as width_sql:
+        width_sql.write("BEGIN TRANSACTION;\n")
+        width_sql.write(f'ALTER TABLE {args["prefix"]}_{geometry_type} ADD COLUMN width_third_quart real;\n')
+        width_sql.write(f'ALTER TABLE {args["prefix"]}_{geometry_type} ADD COLUMN width_maximum real;\n')
+        for srow in np.nditer(stats):
+            width_sql.write(f'UPDATE {args["prefix"]}_{geometry_type} SET width_maximum = {srow["max"]}, width_third_quart = {srow["third_quart"]} WHERE cat = {srow["zone"]};\n')
+        width_sql.write("COMMIT;\n")
+    Module("db.execute", input=str(width_sql_path))
+    width_sql_path.unlink()
+    return 0
 
 
 def main(args):
@@ -1020,28 +1280,35 @@ def main(args):
 
         # Extract lines and areas
         # Create module objects to run in parallel
-        if not all([rmap_exists(f"{args['prefix']}_{geom}_all") for geom in ["lines", "areas"]]) or args["overwrite"]:
+        if (
+            not all(
+                [
+                    rmap_exists(f"{args['prefix']}_{geom}_all")
+                    for geom in ["lines", "areas"]
+                ]
+            )
+            or args["overwrite"]
+        ):
             mms = [extract_lines_and_areas(args, bbox, reg) for bbox in bboxes]
             # Run modules in parallel
             run_modules([m[0] for m in mms], mms[0][1], args)
 
-
-
-        if not all([vmap_exists(f"{args['prefix']}_{geom}_all") for geom in ["lines", "areas"]]) or args["overwrite"]:
+        if not vmap_exists(f"{args['prefix']}_lines_all") or args["overwrite"]:
             # Convert lines to vector
             Module(
                 "r.to.vect",
-                flags="s",
-                overwrite=args["overwrite"],
+                flags=["s", "v"],
+                overwrite=True,
                 input=f"{args['prefix']}_lines_all",
                 output=f"{args['prefix']}_lines_all",
                 type="line",
             )
+        if not vmap_exists(f"{args['prefix']}_areas_all") or args["overwrite"]:
             # Convert areas to vector
             Module(
                 "r.to.vect",
-                flags="s",
-                overwrite=args["overwrite"],
+                flags=["s", "v"],
+                overwrite=True,
                 input=f"{args['prefix']}_areas_all",
                 output=f"{args['prefix']}_areas_all",
                 type="area",
@@ -1053,9 +1320,12 @@ def main(args):
                 args["minimum_gap"],
             )
 
+        if not rmap_exists(f"{args['prefix']}_mosaik_length_rc") or args["overwrite"]:
+            classify_object_length(args)
+
         # Compute soil damage depth from dtm if provided
         if args["dtm"]:
-            if not rmap_exists(args["dtm"]) or args["overwrite"]:
+            if not rmap_exists("dtm") or args["overwrite"]:
                 # Import DTM
                 Module(
                     "r.external",
@@ -1065,11 +1335,14 @@ def main(args):
                     input=args["dtm"],
                     output="dtm",
                 )
-                args["dtm"] = "dtm"
+            args["dtm"] = "dtm"
 
-        if not rmap_exists(f"{args['prefix']}_line_destruction_depth_n") or args["overwrite"]:
-            mms = [identify_surface_damage(args, bbox, reg) for bbox in bboxes]
-            run_modules([m[0] for m in mms], mms[0][1], args)
+            if (
+                not rmap_exists(f"{args['prefix']}_line_dtm_destruction_depth_n_all")
+                or args["overwrite"]
+            ):
+                mms = [identify_damage(args, bbox, reg, "dtm") for bbox in bboxes]
+                run_modules([m[0] for m in mms], mms[0][1], args)
 
         # Compute vegetation damage depth from NDVI if provided
         if args["ndvi"]:
@@ -1085,17 +1358,50 @@ def main(args):
                 )
                 args["ndvi"] = "ndvi"
 
-        # Adjust the following to NDVI
-        if not rmap_exists(f"{args['prefix']}_line_destruction_depth_n") or args["overwrite"]:
-            mms = [identify_surface_damage(args, bbox, reg) for bbox in bboxes]
-            run_modules([m[0] for m in mms], mms[0][1], args)
+            # Adjust the following to NDVI
+            if (
+                not rmap_exists(f"{args['prefix']}_line_ndvi_destruction_depth_n_all")
+                or args["overwrite"]
+            ):
+                mms = [identify_damage(args, bbox, reg, "ndvi") for bbox in bboxes]
+                run_modules([m[0] for m in mms], mms[0][1], args)
+
+        if args["dtm"] or args["ndvi"]:
+            if (
+                vmap_exists(f"{args['prefix']}_lines")
+                or args["overwrite"]
+            ):
+                mms = [collect_line_statistics(args, bbox, reg) for bbox in bboxes]
+                run_modules([m[0] for m in mms], mms[0][1], args)
+                Module(
+                    "r.to.vect",
+                    flags=["s", "v"],
+                    overwrite=True,
+                    input=f"{args['prefix']}_line_statistics_all",
+                    output=f"{args['prefix']}_lines",
+                    type="line",
+                )
+        elif (
+                not vmap_exists(f"{args['prefix']}_lines")
+                or args["overwrite"]
+            ):
+            Module("g.rename", vector=[f"{args['prefix']}_lines_all" ,f"{args['prefix']}_lines"]) 
+
+        if (
+                not vmap_exists(f"{args['prefix']}_areas")
+                or args["overwrite"]
+            ):
+            Module("g.rename", vector=[f"{args['prefix']}_areas_all",f"{args['prefix']}_areas"])
+
+        add_vector_attributes(args, "lines")
+        add_vector_attributes(args, "areas")
 
         # Export vector results
-        export_vector_map(args, f"{args['prefix']}_lines_all")
+        export_vector_map(args, f"{args['prefix']}_lines")
         export_vector_map(args, f"{args['prefix']}_areas_all")
 
         # Create and export 7TK maps
-        export_7TK(args, f'{args["prefix"]}_mosaik_final')
+        export_7TK2(args, f'{args["prefix"]}_mosaik_smoothed_all')
         print("Done")
 
 
@@ -1111,7 +1417,7 @@ if __name__ == "__main__":
         dest="input",
         required=True,
         type=str,
-        #nargs=1,
+        # nargs=1,
         help="Path to the input directory with results from previous steps",
     )
 
@@ -1121,7 +1427,7 @@ if __name__ == "__main__":
         dest="output",
         required=True,
         default="./",
-        #nargs=1,
+        # nargs=1,
         help="Path to directory to store results.",
     )
 
@@ -1130,9 +1436,29 @@ if __name__ == "__main__":
         dest="workdir",
         required=True,
         type=str,
-        #nargs=1,
+        # nargs=1,
         help="Path to working directory where analysis are run.\n"
         "Should have enough storage capacity.",
+    )
+
+    parser.add_argument(
+        "-roads",
+        dest="roads",
+        required=False,
+        type=str,
+        # nargs=1,
+        help="Path to an OGR readable file with data on roads."
+        "If the file contains several layers, the relevant layer has to be specified separated by space",
+    )
+
+    parser.add_argument(
+        "-streams",
+        dest="streams",
+        required=False,
+        type=str,
+        # nargs=1,
+        help="Path to an OGR readable file with data on streams."
+        "If the file contains several layers, the relevant layer has to be specified separated by space",
     )
 
     parser.add_argument(
@@ -1140,7 +1466,7 @@ if __name__ == "__main__":
         dest="prefix",
         required=True,
         type=str,
-        #nargs=1,
+        # nargs=1,
         help="Prefix used for temporary maps and workdir",
     )
 
@@ -1188,10 +1514,10 @@ if __name__ == "__main__":
         dest="proc_win",
         type=float,
         default=None,
-        nargs="?",
+        nargs=4,
         help="Extent to process defined by upper left and lower right coordinates\n"
         "So, coordinates order should be W N E S, e.g.:\n"
-        "-proc_win \"-11000 785000 3000 772000\"",
+        '-proc_win "-11000 785000 3000 772000"',
     )
 
     parser.add_argument(
@@ -1207,7 +1533,7 @@ if __name__ == "__main__":
         "-verbose",
         dest="verbose",
         default=False,
-        action='store_true',
+        action="store_true",
         help="Give verbose progress information",
     )
 
@@ -1215,7 +1541,7 @@ if __name__ == "__main__":
         "-overwrite",
         dest="overwrite",
         default=False,
-        action='store_true',
+        action="store_true",
         help="Overwrite existing maps (default is skip recreation)",
     )
 
@@ -1252,6 +1578,16 @@ if __name__ == "__main__":
         dest="minimum_size",
         type=float,
         default=5.0,
+        nargs="?",
+        help="The minimum size of possible tracks objects to keep (in m2).\n"
+        "Detected objects smaller than this size are discarded if not part of a network",
+    )
+
+    parser.add_argument(
+        "-minimum_gap",
+        dest="minimum_gap",
+        type=float,
+        default=2.0,
         nargs="?",
         help="The minimum size of possible tracks objects to keep (in m2).\n"
         "Detected objects smaller than this size are discarded if not part of a network",
