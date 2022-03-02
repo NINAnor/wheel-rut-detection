@@ -37,11 +37,16 @@ from shutil import which
 import numpy as np
 
 if not "GRASSBIN" in os.environ:
-    os.environ["GRASSBIN"] = which("grass")
+    for grass_version in ["grass", "grass80", "grass82"]:
+        if which(grass_version):
+           os.environ["GRASSBIN"] = which(grass_version)
+           break
+        else:
+            os.environ["GRASSBIN"] = ""
 
-p = subprocess.Popen([os.environ["GRASSBIN"], "--config"], stdout=subprocess.PIPE)
+p = subprocess.Popen([os.environ["GRASSBIN"], "--config", "version"], stdout=subprocess.PIPE)
 grass_check = p.communicate()[0]
-if not grass_check or int(grass_check.decode().split("\n")[5][0]) < 8:
+if not grass_check or int(grass_check.decode()[0]) < 8:
     sys.exit("Could not find a GRASS GIS 8 (or later) installation.\n"
              "Please install it or provide the path in the GRASSBIN environment variable.")
 
@@ -1622,7 +1627,7 @@ def main(args):
                     overwrite=True,
                     quiet=True,
                     flags="r",
-                    input=args["ndvi"],
+                    input=str(args["ndvi"]),
                     output="multispectral",
                 )
                 mms = [compute_ndvi(args, bbox, reg) for bbox in bboxes]
@@ -1724,7 +1729,7 @@ if __name__ == "__main__":
         required=False,
         type=str,
         # nargs=1,
-        help="Path to an OGR readable file with data on roads."
+        help="Path to an OGR readable file with data on roads.\n"
         "If the file contains several layers, the relevant layer has to be specified separated by space",
     )
 
@@ -1734,7 +1739,7 @@ if __name__ == "__main__":
         required=False,
         type=str,
         # nargs=1,
-        help="Path to an OGR readable file with data on streams."
+        help="Path to an OGR readable file with data on streams.\n"
         "If the file contains several layers, the relevant layer has to be specified separated by space",
     )
 
@@ -1753,7 +1758,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         nargs="?",
-        help="Number of rows and columns to use in tiled processing (e.g. '3,5')"
+        help="Number of rows and columns to use in tiled processing (e.g. '3,5')\n"
         "If not provided, tiling will be derived from the number of cores given in the nprocs option",
     )
 
@@ -1781,7 +1786,7 @@ if __name__ == "__main__":
         type=str,
         default=None,
         nargs="?",
-        help="Path to multispectral image for extraction of NDVI statistics for wheel ruts\n",
+        help="Path to multispectral image for extraction of NDVI statistics for wheel ruts",
     )
 
     parser.add_argument(
@@ -1864,7 +1869,7 @@ if __name__ == "__main__":
         type=str,
         default="BGREIA",
         nargs="?",
-        help="Order of bands in input imagery for NDVI handling"
+        help="Order of bands in input imagery for NDVI handling\n"
         "B:blue, G:green, R:red, E:red edge, I:NIR, A:alpha, other bands are currently ignored",
     )
     parser.add_argument(
