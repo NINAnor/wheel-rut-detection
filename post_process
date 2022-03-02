@@ -1451,7 +1451,7 @@ def compute_ndvi(args, bbox, region):
                 overwrite=True,
                 quiet=True,
                 input=f"multispectral.{ir}",
-                output=f"multispectral_res_ir",
+                output=f"{tile_prefix}_res_ir",
                 method="minimum",
             ),
             Module(
@@ -1461,7 +1461,7 @@ def compute_ndvi(args, bbox, region):
                 overwrite=True,
                 quiet=True,
                 input=f"multispectral.{r}",
-                output=f"multispectral_res_r",
+                output=f"{tile_prefix}_res_r",
                 method="minimum",
             ),
             Module(
@@ -1470,7 +1470,7 @@ def compute_ndvi(args, bbox, region):
                 run_=False,
                 env_=genv_tile,
                 overwrite=True,
-                expression=f"{tile_prefix}_ndvi=(multispectral_res_ir-multispectral_res_r)/(multispectral_res_ir+multispectral_res_r)",
+                expression=f"{tile_prefix}_ndvi=({tile_prefix}_res_ir-{tile_prefix}_res_r)/({tile_prefix}_res_ir+{tile_prefix}_res_r)",
             ),
         ]
     )
