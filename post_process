@@ -1424,7 +1424,7 @@ def create_raster_mask(args, bbox, region):
     return mm, ["inverse_mask"]
 
 
-def compute_ndvi(args):
+def compute_ndvi(args, bbox, region):
     """Compute NDVI from multispectral imagery"""
 
     tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
