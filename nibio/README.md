@@ -7,6 +7,8 @@ burn the ground truth (a shape file) to geotiff.
 
 To use it, change 'your_*' to your own stuff.
 
+The ground truth is in dir ground_truth_gpkg.
+
 ## 2_training_preprocess_python
 
 This dir has python scripts (or rather a list of commands) that can
