@@ -1181,8 +1181,8 @@ def collect_line_statistics(args, bbox, region):
 
     mc_expression = f'{tile_prefix}_line_statistics=int(if({args["prefix"]}_mosaik_size_rc > {args["minimum_size"]} || {args["prefix"]}_mosaik_length_rc > {args["minimum_length"]} * 100.0, if({tile_prefix}_lines, {tile_prefix}_lines*10000 '
     if args["ndvi"]:
-        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_min_all), 0, {args["prefix"]}_line_ndvi_destruction_min_all*1000)'
-        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_n_all), 0, {args["prefix"]}_line_ndvi_destruction_n_all*100)'
+        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_min_all), 0, {args["prefix"]}_line_ndvi_destruction_depth_min_all*1000)'
+        mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_n_all), 0, {args["prefix"]}_line_ndvi_destruction_depth_n_all*100)'
 
     if args["dtm"]:
         mc_expression += f'+if(isnull({args["prefix"]}_line_dtm_destruction_depth_min_all), 0, {args["prefix"]}_line_dtm_destruction_depth_min_all*10)'
@@ -1450,6 +1450,9 @@ def compute_ndvi(args, bbox, region):
     """Compute NDVI from multispectral imagery"""
 
     tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
+    # NDVI = (NIR - Red) / (NIR + Red)
+    ir = args["bands"].index("I") + 1
+    r = args["bands"].index("R") + 1
     genv_tile = bbox2regenv(
         # bbox, region, overlap=0, align_rmap=f'{args["prefix"]}_mosaik', res=None
         bbox,
@@ -1458,16 +1461,29 @@ def compute_ndvi(args, bbox, region):
         align_rmap=None,
         res=args["resolution"],
     )
+    genv_tile_org = bbox2regenv(
+        # bbox, region, overlap=0, align_rmap=f'{args["prefix"]}_mosaik', res=None
+        bbox,
+        region,
+        overlap=2,
+        align_rmap=f"multispectral.ir",
+    )
 
     # print(bbox)
-    # print(genv_tile)
-
-    # NDVI = (NIR - Red) / (NIR + Red)
-    ir = args["bands"].index("I") + 1
-    r = args["bands"].index("R") + 1
+    # print(genv_tile["GRASS_REGION"])
+    # print(genv_tile_org["GRASS_REGION"])
 
     mm = MultiModule(
         [
+            # Compute NDVI with original resolution
+            Module(
+                "r.mapcalc",
+                quiet=True,
+                run_=False,
+                env_=genv_tile_org,
+                overwrite=True,
+                expression=f"{tile_prefix}_ndvi_org=int(round(((multispectral.ir-multispectral.r)/(multispectral.ir+multispectral.r))*1000))",
+            ),
             # Resample to target resolution
             Module(
                 "r.resamp.stats",
@@ -1475,30 +1491,11 @@ def compute_ndvi(args, bbox, region):
                 env_=genv_tile,
                 overwrite=True,
                 quiet=True,
-                input=f"multispectral.{ir}",
-                output=f"{tile_prefix}_res_ir",
-                method="minimum",
+                input=f"{tile_prefix}_ndvi_org",
+                output=f"{tile_prefix}_ndvi",
+                method="average",
             ),
-            Module(
-                "r.resamp.stats",
-                run_=False,
-                env_=genv_tile,
-                overwrite=True,
-                quiet=True,
-                input=f"multispectral.{r}",
-                output=f"{tile_prefix}_res_r",
-                method="minimum",
-            ),
-            Module(
-                "r.mapcalc",
-                quiet=True,
-                run_=False,
-                env_=genv_tile,
-                overwrite=True,
-                expression=f"{tile_prefix}_ndvi=int(round((({tile_prefix}_res_ir-{tile_prefix}_res_r)/({tile_prefix}_res_ir+{tile_prefix}_res_r))*1000))",
-            ),
-        ]
-    )
+                    ])
     return mm, ["ndvi"]
 
 
@@ -1692,14 +1689,47 @@ def main(args):
         if args["ndvi"]:
             if not rmap_exists(f'{args["prefix"]}_ndvi_all') or args["overwrite"]:
                 # Import DTM
+                ir = args["bands"].index("I") + 1
+                r = args["bands"].index("R") + 1
                 Module(
                     "r.external",
                     overwrite=True,
                     quiet=True,
                     flags="r",
                     input=str(args["ndvi"]),
-                    output="multispectral",
+                    band=ir,
+                    output="multispectral_org.ir",
                 )
+                Module(
+                    "r.external",
+                    overwrite=True,
+                    quiet=True,
+                    flags="r",
+                    input=str(args["ndvi"]),
+                    band=r,
+                    output="multispectral_org.r",
+                )
+                mod_queue = ParallelModuleQueue(nprocs=2)
+                mod_queue.put([
+                Module(
+                    "r.resamp.stats",
+                    overwrite=True,
+                    quiet=True,
+                    input="multispectral_org.r",
+                    output="multispectral.r",
+                    method="average",
+                ),
+                Module(
+                    "r.resamp.stats",
+                    overwrite=True,
+                    quiet=True,
+                    input="multispectral_org.ir",
+                    output="multispectral.ir",
+                    method="average",
+                ),
+                        ])
+                mod_queue.wait()
+
                 gscript.verbose(_("Computing NDVI"))
                 mms = [compute_ndvi(args, bbox, reg) for bbox in bboxes]
                 run_modules([m[0] for m in mms], mms[0][1], args)
