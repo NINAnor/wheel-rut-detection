@@ -228,6 +228,8 @@ def resample(args, mapname, bbox, region):
     """Resample raster map to desired resolution"""
     tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
 
+    mapinfo = gscript.parse_command("r.info", flags="g", map=f'{args["prefix"]}_{mapname}')
+    aggregate = float(mapinfo['ewres']) <= args["resolution"] and float(mapinfo['nsres']) <= args["resolution"]
     genv_tile = bbox2regenv(
         # bbox, region, overlap=0, align_rmap=f'{args["prefix"]}_mosaik', res=None
         bbox,
@@ -238,14 +240,14 @@ def resample(args, mapname, bbox, region):
     )
     # Resample to target resolution
     mm = Module(
-        "r.resamp.stats",
+        "r.resamp.stats" if aggregate else "r.resamp.interp",
         run_=False,
         env_=genv_tile,
         overwrite=args["overwrite"],
         quiet=True,
         input=f'{args["prefix"]}_{mapname}',
         output=f"{tile_prefix}_{mapname}_res",
-        method="mode",
+        method="mode" if aggregate else "nearest",
     )
     return mm, [f"{mapname}_res"]
 
@@ -893,7 +895,7 @@ def classify_object_size(args):
         input=f"{args['prefix']}_mosaik_rc",
         output=f"{args['prefix']}_mosaik_clumps",
     )
-    rc_file_name = args["workdir"].joinpath("size_rc.txt")
+    rc_file_name = args["workdir"].joinpath(f'{args["prefix"]}_size_rc.txt')
     with open(rc_file_name, "w") as rc_file:
         rc_file.write(
             Module(
@@ -950,7 +952,7 @@ def classify_object_length(args):
     fo = StringIO()
     np.savetxt(fo, np_arr, delimiter="=", fmt="%i")
     fo.write("*=NULL\n")
-    rc_file_name = args["workdir"].joinpath("length_rc.txt")
+    rc_file_name = args["workdir"].joinpath(f'{args["prefix"]}_length_rc.txt')
     with open(rc_file_name, "w") as rc_file:
         rc_file.write(fo.getvalue())
 
@@ -1179,7 +1181,7 @@ def collect_line_statistics(args, bbox, region):
 
     tile_prefix = "{}_tile_{}".format(args["prefix"], str(bbox[0]).zfill(3))
 
-    mc_expression = f'{tile_prefix}_line_statistics=int(if({args["prefix"]}_mosaik_size_rc > {args["minimum_size"]} || {args["prefix"]}_mosaik_length_rc > {args["minimum_length"]} * 100.0, if({tile_prefix}_lines, {tile_prefix}_lines*10000 '
+    mc_expression = f'{tile_prefix}_lines=int(if({args["prefix"]}_mosaik_size_rc > {args["minimum_size"]} || {args["prefix"]}_mosaik_length_rc > {args["minimum_length"]} * 100.0, if({tile_prefix}_lines_core, {tile_prefix}_lines*10000 '
     if args["ndvi"]:
         mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_min_all), 0, {args["prefix"]}_line_ndvi_destruction_depth_min_all*1000)'
         mc_expression += f'+if(isnull({args["prefix"]}_line_ndvi_destruction_depth_n_all), 0, {args["prefix"]}_line_ndvi_destruction_depth_n_all*100)'
@@ -1219,7 +1221,7 @@ def collect_line_statistics(args, bbox, region):
                 overwrite=True,
                 quiet=True,
                 input=f"{args['prefix']}_lines_all_core",
-                output=f"{tile_prefix}_lines",
+                output=f"{tile_prefix}_lines_core",
                 type="line",
                 use="cat",
             ),
@@ -1233,7 +1235,7 @@ def collect_line_statistics(args, bbox, region):
             ),
         ]
     )
-    return mm, ["line_statistics", "lines", "areas"]
+    return mm, ["lines", "areas"]
 
 
 def add_vector_attributes(args, geom_type):
@@ -1263,15 +1265,12 @@ def add_vector_attributes(args, geom_type):
                 update_str += "surface_damage_extent=CAST(substr(CAST(cat AS text), length(cat), 1) AS integer), "
                 update_str += "surface_damage_depth=CAST(substr(CAST(cat AS text), length(cat)-1, 1) AS integer);"
             if args["ndvi"]:
-                if update_str.endswith(";\n"):
-                    update_str = update_str.replace(";\n", "\n")
+                update_str = update_str.replace(";", ",")
                 addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN vegetation_damage_depth integer;\n'
                 addcol_str += f'ALTER TABLE {args["prefix"]}_lines ADD COLUMN vegetation_damage_extent integer;\n'
                 update_str += "vegetation_damage_extent = CAST(substr(CAST(cat AS text), length(cat)-2, 1) AS integer), "
-                update_str += "vegetation_damage_depth = CAST(substr(CAST(cat AS text), length(cat)-3, 1)) AS integer);"
-            update_str = update_str.rstrip(", ")
-            update_str = update_str.rstrip(";\n")
-            update_str += ";\nCOMMIT;\n"
+                update_str += "vegetation_damage_depth = CAST(substr(CAST(cat AS text), length(cat)-3, 1) AS integer);"
+            update_str += "\nCOMMIT;\n"
         tmp_sql = args["workdir"].joinpath("attr.sql")
         tmp_sql.write_text(addcol_str + update_str)
         Module("db.execute", quiet=True, input=str(tmp_sql))
@@ -1475,7 +1474,18 @@ def compute_ndvi(args, bbox, region):
 
     mm = MultiModule(
         [
-            # Compute NDVI with original resolution
+            Module(
+                "r.mapcalc",
+                quiet=True,
+                run_=False,
+                env_=genv_tile_org,
+                overwrite=True,
+                expression=f"{tile_prefix}_ndvi=int(round(((multispectral.ir-multispectral.r)/(multispectral.ir+multispectral.r))*1000))",
+            ),
+        ]
+    )
+    """
+            # Reduce pixel depth
             Module(
                 "r.mapcalc",
                 quiet=True,
@@ -1494,8 +1504,7 @@ def compute_ndvi(args, bbox, region):
                 input=f"{tile_prefix}_ndvi_org",
                 output=f"{tile_prefix}_ndvi",
                 method="average",
-            ),
-                    ])
+            ),"""
     return mm, ["ndvi"]
 
 
@@ -1503,13 +1512,13 @@ def filter_areas(args):
     """"""
     # Filter by size and length
     length_arr = np.genfromtxt(
-        str(args["workdir"].joinpath("length_rc.txt")), delimiter="=", dtype=np.int
+        str(args["workdir"].joinpath(f'{args["prefix"]}_length_rc.txt')), delimiter="=", dtype=np.int
     )
     length_arr = length_arr[
         np.where(length_arr[:, 1] > (args["minimum_length"] * 100.0))
     ]
     size_arr = np.genfromtxt(
-        str(args["workdir"].joinpath("size_rc.txt")), delimiter="=", dtype=np.int
+        str(args["workdir"].joinpath(f'{args["prefix"]}_size_rc.txt')), delimiter="=", dtype=np.int
     )
     size_arr = size_arr[np.where(size_arr[:, 1] > args["minimum_size"])]
     clumps = set(size_arr[:, 0].tolist() + length_arr[:, 0].tolist())
@@ -1533,8 +1542,8 @@ def filter_areas(args):
         stdin_=rules,
     )
 
-    args["workdir"].joinpath("length_rc.txt").unlink()
-    args["workdir"].joinpath("size_rc.txt").unlink()
+    # args["workdir"].joinpath(f'{args["prefix"]}_length_rc.txt').unlink()
+    # args["workdir"].joinpath(f'{args["prefix"]}_size_rc.txt').unlink()
 
     return 0
 
@@ -1671,7 +1680,7 @@ def main(args):
                     "r.external",
                     overwrite=True,
                     quiet=True,
-                    flags="m",
+                    flags=["o", "m"],
                     input=str(args["dtm"]),
                     output="dtm",
                 )
@@ -1695,7 +1704,7 @@ def main(args):
                     "r.external",
                     overwrite=True,
                     quiet=True,
-                    flags="r",
+                    flags=["o", "r"],
                     input=str(args["ndvi"]),
                     band=ir,
                     output="multispectral_org.ir",
@@ -1704,30 +1713,33 @@ def main(args):
                     "r.external",
                     overwrite=True,
                     quiet=True,
-                    flags="r",
+                    flags=["o", "r"],
                     input=str(args["ndvi"]),
                     band=r,
                     output="multispectral_org.r",
                 )
                 mod_queue = ParallelModuleQueue(nprocs=2)
-                mod_queue.put([
+                mod_queue.put(
                 Module(
                     "r.resamp.stats",
+                    run_=False,
                     overwrite=True,
                     quiet=True,
                     input="multispectral_org.r",
                     output="multispectral.r",
                     method="average",
-                ),
+                ))
+                mod_queue.put(
                 Module(
                     "r.resamp.stats",
+                    run_=False,
                     overwrite=True,
                     quiet=True,
                     input="multispectral_org.ir",
                     output="multispectral.ir",
                     method="average",
-                ),
-                        ])
+                )
+                        )
                 mod_queue.wait()
 
                 gscript.verbose(_("Computing NDVI"))
@@ -1754,7 +1766,7 @@ def main(args):
                     quiet=True,
                     flags=["s", "v"],
                     overwrite=True,
-                    input=f"{args['prefix']}_line_statistics_all",
+                    input=f"{args['prefix']}_lines_all",
                     output=f"{args['prefix']}_lines",
                     type="line",
                 )
