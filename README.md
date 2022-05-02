@@ -11,8 +11,11 @@ The repository contains code for three different tasks, organized in three subdi
 
 
 ## Authors and acknowledgment
+
 Stefan Blumentrath (NINA)
+
 Nils Egil Søvde (NIBIO)
+
 Stefano Puliti (NIBIO)
 
 ## License
