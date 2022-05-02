@@ -1165,7 +1165,7 @@ def identify_damage(args, bbox, region, damage_type):
 
 def export_vector_map(args, vmap):
     out_file = args["output"].joinpath(args["prefix"] + ".gpkg")
-    flags = {True: ["s", "2", "m", "u"], False: ["s", "2", "m"]}
+    flags = {True: ["s", "2", "u"], False: ["s", "2"]}
     Module(
         "v.out.ogr",
         quiet=True,
@@ -1858,6 +1858,15 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "-prefix",
+        dest="prefix",
+        required=True,
+        type=str,
+        # nargs=1,
+        help="Prefix used for naming temporary data and result maps",
+    )
+
+    parser.add_argument(
         "-roads",
         dest="roads",
         required=False,
@@ -1878,21 +1887,13 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-prefix",
-        dest="prefix",
-        required=True,
-        type=str,
-        # nargs=1,
-        help="Prefix used for temporary maps and workdir",
-    )
-
-    parser.add_argument(
         "-tiling",
         dest="tiling",
         type=str,
         default=None,
         nargs="?",
         help="Number of rows and columns to use in tiled processing (e.g. '3,5')\n"
+        "Should be a multiple of 'nprocs'\n"
         "If not provided, tiling will be derived from the number of cores given in the nprocs option",
     )
 
