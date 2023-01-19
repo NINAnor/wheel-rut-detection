@@ -15,8 +15,8 @@ track_radius="0.6"
 
 base_data_dir="your_dir"
 
-balsfjord_gpkg_file="${base_data_dir}/ground_truth/balsfjord_sf_withtile.gpkg"
-rjukan_gpkg_file="${base_data_dir}/ground_truth/rjukan_sf_withtile.gpkg"
+balsfjord_gpkg_file="${base_data_dir}/ground_truth_gpkg/balsfjord_sf_withtile.gpkg"
+rjukan_gpkg_file="${base_data_dir}/ground_truth_gpkg/rjukan_sf_withtile.gpkg"
 
 # balsfjord_high_res_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb.tiff"
 
