@@ -1,0 +1,12 @@
+version: "3"
+services:
+  deep_learning:
+    build: .
+    command: bash -exuo pipefail -- 1_training_preprosess_bash/burn_fasit.sh
+    volumes:
+      - ./1_training_preprosess_bash:/app/1_training_preprosess_bash
+  postgres:
+    image: postgis/postgis:15-3.3
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: trust
+      #POSTGRES_PASSWORD: postgres
