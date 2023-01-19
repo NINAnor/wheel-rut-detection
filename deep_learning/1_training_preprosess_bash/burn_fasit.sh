@@ -1,9 +1,9 @@
-db_host="your_db_host"
-dbname="your_dbname"
-db_user="your_db_user"
+db_host="postgres"
+dbname="postgres"
+db_user="postgres"
 
-db_schema="your_db_schema"
-db_fasit_table="your_fasit_table"
+db_schema="public"
+db_fasit_table="fasit"
 
 db_epsg_code="25832"
 balsfjord_drone_tif_epsg="32634"
@@ -13,7 +13,7 @@ rjukan_aerial_tif_epsg="25832"
 
 track_radius="0.6"
 
-base_data_dir="your_dir"
+base_data_dir="1_training_preprosess_bash"
 
 balsfjord_gpkg_file="${base_data_dir}/ground_truth_gpkg/balsfjord_sf_withtile.gpkg"
 rjukan_gpkg_file="${base_data_dir}/ground_truth_gpkg/rjukan_sf_withtile.gpkg"
