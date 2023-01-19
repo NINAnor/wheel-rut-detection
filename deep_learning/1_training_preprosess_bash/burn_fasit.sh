@@ -49,6 +49,8 @@ rjukan_aerial_burn_tif="${base_data_dir}/ground_truth/rjukan_aerial_track_mask.t
 #          --config BIGTIFF_OVERVIEW YES --config TILED YES \
 #          --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
 
+timeout 60 bash -c "until pg_isready -h ${db_host} -U ${db_user}; do sleep 1; done"
+
 psql -h "${db_host}" -d "${dbname}" -U "${db_user}" -1 -c "
     DROP TABLE IF EXISTS ${db_schema}.${db_fasit_table};
     CREATE UNLOGGED TABLE ${db_schema}.${db_fasit_table} (
