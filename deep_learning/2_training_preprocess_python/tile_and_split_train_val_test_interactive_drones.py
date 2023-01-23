@@ -46,7 +46,7 @@ def write_array_to_tif(new_file, transform, projection, band_count,
 
 img_target_size = 300
 
-data_dir = 'your_dir'
+data_dir = '1_training_preprosess_bash'
 
 balsfjord_drone_file = os.path.join(data_dir, 'drone',
                                     '2020_10_balsfjord_rgb_low_res.tiff')
