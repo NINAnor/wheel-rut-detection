@@ -18,7 +18,7 @@ base_data_dir="1_training_preprosess_bash"
 balsfjord_gpkg_file="${base_data_dir}/ground_truth_gpkg/balsfjord_sf_withtile.gpkg"
 rjukan_gpkg_file="${base_data_dir}/ground_truth_gpkg/rjukan_sf_withtile.gpkg"
 
-# balsfjord_high_res_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb.tiff"
+balsfjord_high_res_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb.tiff"
 
 balsfjord_drone_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb_low_res.tiff"
 rjukan_drone_tif="${base_data_dir}/drone/2020_10_rjukan_rgb.tif"
@@ -34,20 +34,24 @@ rjukan_drone_burn_tif="${base_data_dir}/ground_truth/rjukan_drone_track_mask.tif
 balsfjord_aerial_burn_tif="${base_data_dir}/ground_truth/balsfjord_aerial_track_mask.tif"
 rjukan_aerial_burn_tif="${base_data_dir}/ground_truth/rjukan_aerial_track_mask.tif"
 
-# gdalwarp -tr 0.07 -0.07 -r 'near' \
-#          -co "BIGTIFF=YES" \
-#          -co "TILED=YES" \
-#          -co "COMPRESS=DEFLATE" \
-#          "${balsfjord_high_res_tif}" "${balsfjord_drone_tif}"
+if [ ! -f "${balsfjord_drone_tif}" ]
+then
+
+gdalwarp -tr 0.07 -0.07 -r 'near' \
+         -co "BIGTIFF=YES" \
+         -co "TILED=YES" \
+         -co "COMPRESS=DEFLATE" \
+         "${balsfjord_high_res_tif}" "${balsfjord_drone_tif}"
 
 # # copy to /space
-# gdaladdo -ro 2020_10_balsfjord_rgb_low_res.tiff --config BIGTIFF YES \
-#          --config BIGTIFF_OVERVIEW YES --config TILED YES \
-#          --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+gdaladdo -ro "${balsfjord_drone_tif}" --config BIGTIFF YES \
+         --config BIGTIFF_OVERVIEW YES --config TILED YES \
+         --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
 # # mode is worse
-# gdaladdo -ro 2020_10_balsfjord_rgb_low_res_mode.tiff --config BIGTIFF YES \
-#          --config BIGTIFF_OVERVIEW YES --config TILED YES \
-#          --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+gdaladdo -ro "${balsfjord_drone_tif}" --config BIGTIFF YES \
+         --config BIGTIFF_OVERVIEW YES --config TILED YES \
+         --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+fi
 
 timeout 60 bash -c "until pg_isready -h ${db_host} -U ${db_user}; do sleep 1; done"
 

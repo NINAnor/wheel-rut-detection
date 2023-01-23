@@ -5,6 +5,10 @@ services:
     command: bash -exuo pipefail -- 1_training_preprosess_bash/burn_fasit.sh
     volumes:
       - ./1_training_preprosess_bash:/app/1_training_preprosess_bash
+      - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/2020_10_balsfjord_rgb.tiff:/app/1_training_preprosess_bash/drone/2020_10_balsfjord_rgb.tiff:ro
+      - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/2020_10_rjukan_rgb.tif:/app/1_training_preprosess_bash/drone/2020_10_rjukan_rgb.tif:ro
+      - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/NiB/Balsfjord/Eksport-nib.tif:/app/1_training_preprosess_bash/aerial/Eksport-nib_balsfjord.tif:ro
+      - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/NiB/Rjukan/Eksport-nib.tif:/app/1_training_preprosess_bash/aerial/Eksport-nib.tif:ro
   postgres:
     image: postgis/postgis:15-3.3
     environment:
