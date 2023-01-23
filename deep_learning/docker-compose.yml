@@ -2,6 +2,14 @@ version: "3"
 services:
   deep_learning:
     build: .
+    shm_size: 2gb
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     volumes:
       - ./run.sh:/app/run.sh:ro
       - ./1_training_preprosess_bash:/app/1_training_preprosess_bash
@@ -10,6 +18,9 @@ services:
       - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/NiB/Balsfjord/Eksport-nib.tif:/app/1_training_preprosess_bash/aerial/Eksport-nib_balsfjord.tif:ro
       - /data/P-Prosjekter/15215600_autmatisert_kartlegging_av_barmarksskader/NiB/Rjukan/Eksport-nib.tif:/app/1_training_preprosess_bash/aerial/Eksport-nib.tif:ro
       - ./2_training_preprocess_python:/app/2_training_preprocess_python
+      - ./3_training_python_modules:/app/3_training_python_modules
+      - ./4_train:/app/4_train
+      - ./model_save_dir:/app/model_save_dir
   postgres:
     image: postgis/postgis:15-3.3
     environment:

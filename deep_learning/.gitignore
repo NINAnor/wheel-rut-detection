@@ -7,3 +7,7 @@
 1_training_preprosess_bash/drone/
 1_training_preprosess_bash/ground_truth/
 1_training_preprosess_bash/pytorch_datasets/
+
+# Model
+model_save_dir/*
+!model_save_dir/README.md

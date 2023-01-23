@@ -6,3 +6,6 @@ bash ./1_training_preprosess_bash/burn_fasit.sh
 pdm run python 2_training_preprocess_python/tile_and_split_train_val_test_interactive_aerial.py
 pdm run python 2_training_preprocess_python/tile_and_split_train_val_test_interactive_drones.py
 
+export PYTHONPATH="$PWD/3_training_python_modules:$PWD/3_training_python_modules/from_torchvision_reference:$PWD/3_training_python_modules/from_torchvision_reference_and_modified"
+pdm run python 4_train/interactive_test_pretrained_sem_seg_tracks_aerial_300_rgb.py
+pdm run python 4_train/interactive_test_pretrained_sem_seg_tracks_drone_300_rgb.py

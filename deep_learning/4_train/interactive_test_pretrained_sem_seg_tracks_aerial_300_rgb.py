@@ -25,13 +25,13 @@ scaler = torch.cuda.amp.GradScaler()
 # scaler = None
 
 
-base_dir = 'your_dir'
+base_dir = '.'
 
 model_save_dir = os.path.join(base_dir, 'model_save_dir')
 if not os.path.exists(model_save_dir):
     os.makedirs(model_save_dir)
 
-base_data_dir = 'your_data_dir'
+base_data_dir = '1_training_preprosess_bash/pytorch_datasets/semantic_segmentation_aerial_300_rgb'
 train_dir = os.path.join(base_data_dir, 'train')
 val_dir = os.path.join(base_data_dir, 'val')
 test_dir = os.path.join(base_data_dir, 'test')
