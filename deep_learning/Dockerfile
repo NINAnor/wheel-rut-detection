@@ -26,9 +26,11 @@ RUN --mount=type=cache,sharing=locked,target=/var/cache/yum/metadata \
         g++ \
         gdal-devel
 
-RUN pdm add --no-sync --group gdal gdal==$(gdal-config --version)
 RUN --mount=type=cache,target=/root/.cache/pdm \
-    pdm install --no-self --group gdal
+    pdm install --no-self --no-lock
+RUN --mount=type=cache,target=/root/.cache/pip \
+    .venv/bin/${PDM_PYTHON} -m ensurepip && \
+    .venv/bin/${PDM_PYTHON} -m pip install gdal==$(gdal-config --version)
 
 FROM common
 RUN --mount=type=cache,sharing=locked,target=/var/cache/yum/metadata \
