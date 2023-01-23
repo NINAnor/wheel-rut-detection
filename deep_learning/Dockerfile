@@ -49,3 +49,5 @@ COPY --from=dependencies /app/.pdm.toml /app/.pdm.toml
 #COPY ./4_train ./4_train
 #COPY ./5_predict_preprocess_python ./5_predict_preprocess_python
 #COPY ./6_predict ./6_predict
+
+CMD ["/bin/bash", "/app/run.sh"]
