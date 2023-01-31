@@ -1,0 +1,18 @@
+[tool]
+[tool.pdm]
+
+[project]
+name = ""
+version = ""
+description = ""
+authors = [
+    {name = "Francesco Frassinelli", email = "francesco.frassinelli@nina.no"},
+]
+dependencies = [
+    "torchvision>=0.14.1",
+    "torchaudio>=0.13.1",
+    "pycocotools>=2.0.6",
+    "scikit-learn>=1.2.0",
+]
+requires-python = ">=3.8"
+license = {text = "GPLv3"}

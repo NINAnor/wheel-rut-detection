@@ -1,9 +1,9 @@
-db_host="your_db_host"
-dbname="your_dbname"
-db_user="your_db_user"
+db_host="postgres"
+dbname="postgres"
+db_user="postgres"
 
-db_schema="your_db_schema"
-db_fasit_table="your_fasit_table"
+db_schema="public"
+db_fasit_table="fasit"
 
 db_epsg_code="25832"
 balsfjord_drone_tif_epsg="32634"
@@ -13,12 +13,12 @@ rjukan_aerial_tif_epsg="25832"
 
 track_radius="0.6"
 
-base_data_dir="your_dir"
+base_data_dir="1_training_preprosess_bash"
 
-balsfjord_gpkg_file="${base_data_dir}/ground_truth/balsfjord_sf_withtile.gpkg"
-rjukan_gpkg_file="${base_data_dir}/ground_truth/rjukan_sf_withtile.gpkg"
+balsfjord_gpkg_file="${base_data_dir}/ground_truth_gpkg/balsfjord_sf_withtile.gpkg"
+rjukan_gpkg_file="${base_data_dir}/ground_truth_gpkg/rjukan_sf_withtile.gpkg"
 
-# balsfjord_high_res_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb.tiff"
+balsfjord_high_res_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb.tiff"
 
 balsfjord_drone_tif="${base_data_dir}/drone/2020_10_balsfjord_rgb_low_res.tiff"
 rjukan_drone_tif="${base_data_dir}/drone/2020_10_rjukan_rgb.tif"
@@ -34,20 +34,26 @@ rjukan_drone_burn_tif="${base_data_dir}/ground_truth/rjukan_drone_track_mask.tif
 balsfjord_aerial_burn_tif="${base_data_dir}/ground_truth/balsfjord_aerial_track_mask.tif"
 rjukan_aerial_burn_tif="${base_data_dir}/ground_truth/rjukan_aerial_track_mask.tif"
 
-# gdalwarp -tr 0.07 -0.07 -r 'near' \
-#          -co "BIGTIFF=YES" \
-#          -co "TILED=YES" \
-#          -co "COMPRESS=DEFLATE" \
-#          "${balsfjord_high_res_tif}" "${balsfjord_drone_tif}"
+if [ ! -f "${balsfjord_drone_tif}" ]
+then
+
+gdalwarp -tr 0.07 -0.07 -r 'near' \
+         -co "BIGTIFF=YES" \
+         -co "TILED=YES" \
+         -co "COMPRESS=DEFLATE" \
+         "${balsfjord_high_res_tif}" "${balsfjord_drone_tif}"
 
 # # copy to /space
-# gdaladdo -ro 2020_10_balsfjord_rgb_low_res.tiff --config BIGTIFF YES \
-#          --config BIGTIFF_OVERVIEW YES --config TILED YES \
-#          --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+gdaladdo -ro "${balsfjord_drone_tif}" --config BIGTIFF YES \
+         --config BIGTIFF_OVERVIEW YES --config TILED YES \
+         --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
 # # mode is worse
-# gdaladdo -ro 2020_10_balsfjord_rgb_low_res_mode.tiff --config BIGTIFF YES \
-#          --config BIGTIFF_OVERVIEW YES --config TILED YES \
-#          --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+gdaladdo -ro "${balsfjord_drone_tif}" --config BIGTIFF YES \
+         --config BIGTIFF_OVERVIEW YES --config TILED YES \
+         --config COMPRESS_OVERVIEW DEFLATE 4 16 64 256 1024
+fi
+
+timeout 60 bash -c "until pg_isready -h ${db_host} -U ${db_user}; do sleep 1; done"
 
 psql -h "${db_host}" -d "${dbname}" -U "${db_user}" -1 -c "
     DROP TABLE IF EXISTS ${db_schema}.${db_fasit_table};

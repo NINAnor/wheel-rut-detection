@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+
+# PDM
+.pdm.toml
+.venv
+
+# 1_training_preprocess_bash data
+1_training_preprosess_bash/aerial/
+1_training_preprosess_bash/drone/
+1_training_preprosess_bash/ground_truth/
+1_training_preprosess_bash/pytorch_datasets/
+
+# Model
+model_save_dir/*
+!model_save_dir/README.md
+
+# Output
+output/*
+!output/README.md
