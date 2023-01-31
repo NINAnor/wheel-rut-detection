@@ -1,10 +1,4 @@
-python_venv="your_python_venv"
-source "${python_venv}/bin/activate"
-
-# NOTE: to predict, cd to project dir and copy predict.py there
-#       (or another dir with modified files)
-
-project_dir="your_project_dir"
+project_dir="."
 model_dir="${project_dir}/model_save_dir"
 model_file="${model_dir}/your_model_file"
 

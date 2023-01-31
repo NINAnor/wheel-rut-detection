@@ -13,3 +13,6 @@ pdm run python 4_train/interactive_test_pretrained_sem_seg_tracks_drone_300_rgb.
 pdm run python 5_predict_preprocess_python/tile_all_rgb_balsfjord_interactive_drones.py
 pdm run python 5_predict_preprocess_python/tile_all_rgb_interactive_aerial.py
 pdm run python 5_predict_preprocess_python/tile_all_rgb_rjukan_with_extra_split_interactive_drones.py
+
+pdm run bash 6_predict/predict_tracks_atv_aerial_rgb_all.sh
+pdm run bash 6_predict/predict_tracks_atv_drone_rgb_all.sh
