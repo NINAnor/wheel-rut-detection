@@ -1,3 +1,6 @@
+# Python
+__pycache__/
+
 # PDM
 .pdm.toml
 .venv
