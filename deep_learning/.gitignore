@@ -11,3 +11,7 @@
 # Model
 model_save_dir/*
 !model_save_dir/README.md
+
+# Output
+output/*
+!output/README.md

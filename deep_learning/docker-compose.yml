@@ -21,6 +21,8 @@ services:
       - ./3_training_python_modules:/app/3_training_python_modules
       - ./4_train:/app/4_train
       - ./model_save_dir:/app/model_save_dir
+      - ./5_predict_preprocess_python:/app/5_predict_preprocess_python
+      - ./output:/app/output
   postgres:
     image: postgis/postgis:15-3.3
     environment:

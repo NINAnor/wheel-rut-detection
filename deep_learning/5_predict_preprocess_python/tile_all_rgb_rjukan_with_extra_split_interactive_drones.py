@@ -46,12 +46,12 @@ def write_array_to_tif(new_file, transform, projection, band_count,
 
 image_target_size = 300
 
-data_dir = 'your_data_dir'
+data_dir = '1_training_preprosess_bash'
 
 rjukan_drone_file = os.path.join(data_dir, 'drone',
                                     '2020_10_rjukan_rgb.tif')
 
-output_dir = 'your_output_dir'
+output_dir = 'output'
 if not os.path.exists(output_dir):
     os.makedirs(output_dir)
 
